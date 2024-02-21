@@ -1,0 +1,364 @@
+<head>
+  <script
+    defer
+    src="https://cdn.luzmo.com/js/luzmo-embed/5.0.0/luzmo-embed.min.js"
+    charset="utf-8"
+  ></script>
+</head>
+<body>
+  <div class="helpers">
+    <pre class="error-container">LOADING...</pre>
+    <div id="auth-info" style="display: none;">
+      <div>SSO Key: <span id="auth-key"></span> <button id="copy-auth-key">Copy</button></div>
+      <div>SSO Token: <span id="auth-token"></span> <button id="copy-auth-token">Copy</button></div>
+      <div>Dashboard ID or slug: <span id="dashboard-id"></span> <button id="copy-dashboard-id">Copy</button></div>
+    </div>
+  </div>
+  <luzmo-dashboard></luzmo-dashboard>
+  <script>
+    /*
+    #############################
+    #############################
+    ADAPT THE FOLLOWING VARIABLES
+    #############################
+    #############################
+    */
+        
+    // Luzmo app and api host (used to request SSO token and embed dashboard)
+    const LUZMO_APP_SERVER = 'https://app.luzmo.com';
+    const LUZMO_API_HOST = 'https://api.luzmo.com';
+    
+    // api key and token used to request a SSO token
+    const LUZMO_API_KEY = '<API_KEY>';
+    const LUZMO_API_TOKEN = '<API_TOKEN>';
+    
+    // Dashboard ID or slug to embed
+    const DASHBOARD_TO_EMBED = '<DASHBOARD_ID>';
+    
+    // Dashboard edit mode (can be 'view', 'editLimited', or 'editFull')
+    const DESIRED_EDIT_MODE = 'view';
+    
+    /*
+      Instead of defining each individual variable below, 
+      you can define the full request properties here.
+    */
+    const authorizationProperties = {
+      type: 'embed',
+      inactivity_interval: 600,
+      access: {
+  	collections: [
+   	{
+   	id: '<collection ID>',
+   	inheritRights: 'use'
+           	 }
+      	]
+  	},
+      username: '',
+      name: '',
+      email: '',
+      suborganization: '',
+      role: '',
+      metadata: {},
+      account_overrides: {}
+    };
+    
+    /*
+      Make sure to define each variables below, 
+      if the authorizationProperties object above is not used
+    */
+    
+    // SSO user properties (passed along in SSO Authorization request)
+    const USERNAME = '< username >';
+    const NAME = '< user name >';
+    const EMAIL = '< user email >';
+    const SUBORGANIZATION = '< suborganization name >';
+    const COLLECTION_ID = '< collection ID >';
+    const ROLE = 'viewer';
+
+    const OPTIONAL_METADATA = {
+      /*parameter_name: ["value_to_override"]*/
+    };
+    
+    const OPTIONAL_ACCOUNT_OVERRIDES = {
+      /*
+      "<account_id>": {
+        "host": "< The new database host to connect to. >"
+      }
+      */
+    };
+
+    
+    /*
+    #############################
+    #############################
+                END
+    #############################
+    #############################
+    */
+
+    const getAuthorizationTokenAndEmbed = () => {
+      getAuthorizationToken().then(res => {
+        if (res) {
+          const ssoAuthorizationKey = res.id;
+          const ssoAuthorizationToken = res.token;
+          // Show SSO key, token, and dashboard ID in page.
+          showProperties(ssoAuthorizationKey, ssoAuthorizationToken);
+          
+          // Embed the dashboard
+          embedDashboard(ssoAuthorizationKey, ssoAuthorizationToken);
+          
+          /*
+            ###### STEP 1 ######
+            The "changedFilters" event listener is set on the Luzmo component calling the handleChangedFilters function.
+            (reference: https://developer.luzmo.com/#listening-to-events)
+          */
+          const dashboardComponent = document.querySelector('luzmo-dashboard');
+          dashboardComponent.addEventListener("changedFilters", handleChangedFilters);
+        }
+      })
+    }
+    
+
+    const handleChangedFilters = (event) => {
+      console.log("The following changedFilters event is received: ", event);
+      
+      // parse frontend interactivity filters into SSO initialization filters
+      const backendFilters = mapFrontendFiltersIntoBackendInitializationFilters(event);
+      
+      // Store it in the browser for future usage
+      persistFilters(backendFilters);
+    };
+       
+      /*
+        ###### STEP 2 ######
+        The frontend filters are parsed and transformed into backend initialization filters
+      */
+
+    const mapFrontendFiltersIntoBackendInitializationFilters = (frontendChangedFiltersEvent) => {      
+      const frontendFilters = event.detail.data.filters;
+      return frontendFilters
+        // Remove chart / dashboard filters
+        .filter(frontendFilter => !["itemFilter", "global"].includes(frontendFilter.origin))
+        // Map into backend filters
+        .map(frontendFilter => {
+          const backendFilter = {
+            clause: "where",
+            origin: "initialization",
+            chart_id: frontendFilter.itemId,
+            expression: frontendFilter.filters[0].expression,
+            value: frontendFilter.filters[0].parameters[1]
+          };
+          
+          const filterType = frontendFilter.origin;
+          
+          // Add dataset & column ID in case of a non-filter widget filter initialization
+          if (filterType === "filterFromVizItem") {
+            backendFilter.securable_id = frontendFilter.filters[0].parameters[0].datasetId;
+            backendFilter.column_id = frontendFilter.filters[0].parameters[0].columnId;
+          } 
+          
+          return backendFilter;
+        });
+    };
+    
+    
+    /* 
+    Method to get a SSO authorization token in the frontend (NOT RECOMMENDED IN PRODUCTION FOR SECURITY REASONS!)
+    */
+    const getAuthorizationToken = async() => {
+      const errorContainerEl = document.querySelector('.error-container');
+            
+      // The request body to request a SSO authorization token
+      const authorizationRequestBody = {
+        action: 'create',
+        version: '0.1.0',
+        key: LUZMO_API_KEY,
+        token: LUZMO_API_TOKEN,
+        properties: {
+          type: 'embed',
+          inactivity_interval: 600,
+          username: USERNAME,
+          name: NAME,
+          email: EMAIL,
+          suborganization: SUBORGANIZATION,
+	  access: {
+  		collections: [
+   		{
+   		id: COLLECTION_ID,
+   		inheritRights: 'use'
+     	      	 }
+     	 	]
+  		},
+          role: ROLE,
+          metadata: OPTIONAL_METADATA,
+          account_overrides: OPTIONAL_ACCOUNT_OVERRIDES
+        },
+      };
+      
+      if (authorizationProperties && authorizationProperties?.username.length > 0) {
+        console.log("Using the authorizationProperties object instead of the individual variables");
+        authorizationRequestBody.properties = authorizationProperties;
+      }
+      
+      /*
+        ###### STEP 3 ######
+        Initialization filters are retrieved from local storage using the "getPersistedFilters" method,
+        and they are added as "filters" to the "properties" of the authorizationRequestBody.
+        The authorizationRequestBody is passed as the body in the call to create an authorization.
+      */
+      authorizationRequestBody.properties.filters = getPersistedFilters();
+            
+      try {
+        const response = await fetch(LUZMO_API_HOST + '/0.1.0/authorization', {
+          method: 'POST',
+          headers: {
+              'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(authorizationRequestBody)
+        });
+
+        if (response.status === 200) {
+          console.log('Authorization request successful!');
+          
+          // Hide error container
+          errorContainerEl.style.display = "none";
+          
+          // Parse response into JSON object
+          const responseData = await response.json();
+          console.log('Response:', responseData);
+          return responseData;
+        } else {
+          // Show error in page
+          const responseData = await response.json();
+          errorContainerEl.innerText = 'Authorization request failed! Error: ' + JSON.stringify(responseData, null, 2);
+          errorContainerEl.innerHTML += `
+The following SSO Authorization request was made:
+POST ${LUZMO_API_HOST}/0.1.0/authorization<br>
+${JSON.stringify(authorizationRequestBody, null, 2)}`;
+
+          console.error('Authorization request failed! Error:', responseData);
+          return null;
+        }
+      } catch (error) {
+        errorContainerEl.innerText = 'An error occurred while making the request:' + error;
+        console.error('An error occurred while making the request:', error);
+        
+        return null;
+      }
+    }
+
+
+    /* 
+      Method to embed a dashboard with the SSO key and token
+    */
+    const embedDashboard = (authorizationKey, authorizationToken) => {
+      const dashboardComponent = document.querySelector('luzmo-dashboard');
+      
+      // Pass along the app and api host to the frontend component
+      dashboardComponent.appServer = LUZMO_APP_SERVER;
+      dashboardComponent.apiHost = LUZMO_API_HOST;
+
+      
+      // Set the edit mode before passing along authorization token & dashboard
+      dashboardComponent.editMode = DESIRED_EDIT_MODE;
+
+      // Set the SSO Authorization key and token before passing along the dashboard identifier
+      dashboardComponent.authKey = authorizationKey;
+      dashboardComponent.authToken = authorizationToken;
+      
+      // Specify the dashboard to embed
+      dashboardComponent.dashboardId = DASHBOARD_TO_EMBED;
+
+    }
+    
+    
+    /*
+      Method to show authorization token and dashboard ID, and set up copy buttons
+    */
+    const showProperties = (authorizationKey, authorizationToken) => {
+      document.getElementById("auth-info").style.display = "block";
+      
+      const authKeyEl = document.getElementById('auth-key');
+      const authTokenEl = document.getElementById('auth-token');
+      const dashboardIdEl = document.getElementById('dashboard-id');
+
+      // Display the authKey, authToken, and dashboardId values
+      authKeyEl.textContent = authorizationKey;
+      authTokenEl.textContent = authorizationToken;
+      dashboardIdEl.textContent = DASHBOARD_TO_EMBED;
+      
+      // Set up some copy buttons to facilitate copy-pasting values
+      const copyAuthKeyBtn = document.getElementById('copy-auth-key');
+      const copyAuthTokenBtn = document.getElementById('copy-auth-token');
+      const copyDashboardIdBtn = document.getElementById('copy-dashboard-id');
+
+      copyAuthKeyBtn.addEventListener('click', () => {
+        const authKey = document.getElementById('auth-key').textContent;
+        handleCopyClickEvents(copyAuthKeyBtn, authKey);
+      });
+
+      copyAuthTokenBtn.addEventListener('click', () => {
+        const authToken = document.getElementById('auth-token').textContent;
+        handleCopyClickEvents(copyAuthTokenBtn, authToken);
+      });
+
+      copyDashboardIdBtn.addEventListener('click', () => {
+        const dashboardId = document.getElementById('dashboard-id').textContent;
+        handleCopyClickEvents(copyDashboardIdBtn, dashboardId);
+      });
+    }
+    
+    const handleCopyClickEvents = (elementRef, textToWrite) => {
+      navigator.clipboard.writeText(textToWrite);
+      elementRef.innerText = "Copied!";
+      setTimeout(() => {elementRef.innerText = "Copy"}, 2000);
+    };
+    
+    
+    /*
+      Method to persist dashboard initialization filters
+    */
+    const persistFilters = (filters) => {
+      let filtersToPersist;
+      
+      // No filters have been persisted yet, so create a new element
+      if (!localStorage.filters)
+        filtersToPersist = {};
+      else {
+        // Retrieve all persisted filters, 
+        // to overwrite only the filters for the currently embedded dashboard
+        const persistedFilters = localStorage.getItem("filters"); 
+        filtersToPersist = JSON.parse(persistedFilters);
+      }
+      
+      // Scope the filters storage per dashboard, overwriting existing filters
+      filtersToPersist[DASHBOARD_TO_EMBED] = filters;
+      
+      localStorage.setItem("filters", JSON.stringify(filtersToPersist));
+    }
+    
+    
+    /*
+      Method to retrieve persisted dashboard initialization filters
+    */
+    const getPersistedFilters = () => {
+      const filters = localStorage.getItem("filters");
+      
+      // Return empty filters if no filters have been persisted yet
+      if (!filters || filters.length === 0) 
+        return [];
+        
+      const parsedFilters = JSON.parse(filters);
+      
+      // Get dashboard specific initialization filters persisted
+      const dashboardInitFilters = parsedFilters[DASHBOARD_TO_EMBED];
+      if (dashboardInitFilters) return dashboardInitFilters;
+      
+      return [];
+    }
+    
+    
+    // Trigger the method to request a SSO token and embed a dashboard
+    getAuthorizationTokenAndEmbed();
+  </script>
+</body>
